@@ -34,6 +34,8 @@ func (check *checker) overloadTokenToName(op token.Token) string {
 		return "BitShiftRight"
 	case token.AND_NOT:
 		return "BitAndNot"
+	case token.XOR:
+		return "BitXor"
 	case token.LAND:
 		return "And"
 	case token.LOR:
