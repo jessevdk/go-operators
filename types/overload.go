@@ -211,7 +211,11 @@ func (check *checker) overloadUnaryOperator(x *operand, e ast.Expr) bool {
 		return false
 	}
 
-	// TODO: replace ast expression with function call
+	check.pkg.overloads[e] = OverloadInfo{
+		Func: f,
+		Recv: x.expr,
+		Oper: nil,
+	}
 
 	// Resultant type would be of the result
 	x.typ = typ

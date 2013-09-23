@@ -102,12 +102,16 @@ func main() {
 				Sel: ast.NewIdent(info.Func.Name()),
 			}
 
+			args := []ast.Expr{}
+
+			if info.Oper != nil {
+				args = append(args, info.Oper)
+			}
+
 			// Create function call expression
 			call := &ast.CallExpr{
-				Fun: sel,
-				Args: []ast.Expr{
-					info.Oper,
-				},
+				Fun:  sel,
+				Args: args,
 			}
 
 			return call
