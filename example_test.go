@@ -46,6 +46,7 @@ func ExampleOverload() {
 	v1 := vec4{1, 2, 3, 4}
 	v2 := vec4{5, 6, 7, 8}
 
+	// Generates: ret := v1.Op_PreMultiplyScalar(2).Op_Multiply(v2).Op_Add(v1).Op_SubtractScalar(4)
 	ret := 2*v1*v2 + v1 - 4
 
 	fmt.Println(ret)
