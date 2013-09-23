@@ -1,4 +1,4 @@
-Disclaimer: *This is a hack!*
+Disclaimer: **This is a hack!**
 
 This project is an attempt to add operator overloading to the Go language. There
 are very good reasons why Go doesn't support operator overloading as part of
@@ -44,6 +44,48 @@ After you have defined these methods, you can simply use
 `go-operators --output OUTPUT_DIR SOURCE_DIR` to parse all go files in
 `SOURCE_DIR` and generate code in `OUTPUT_DIR`. This should replace all operators,
 where needed, with appropriate method calls.
+
+# List of overloaded operators
+
+| Operator | Method Prefix |
+|----------|---------------|
+| a + b    | Op_Add        |
+| a - b    | Op_Subtract   |
+| a * b    | Op_Multiply   |
+| a / b    | Op_Divide     |
+| a % b    | Op_Modulo     |
+| a & b    | Op_BitAnd     |
+| a &#124; b | Op_BitOr      |
+| a << b   | Op_BitShiftLeft |
+| a >> b   | Op_BitShiftRight |
+| a &^ b   | Op_BitAndNot  |
+| a ^ b    | Op_BitXor     |
+| a && b   | Op_And        |
+| a &#124;&#124; b   | Op_Or         |
+| a < b    | Op_Less       |
+| a > b    | Op_Greater    |
+| a <= b   | Op_LessOrEqual |
+| a >= b   | Op_GreaterOrEqual |
+| -a       | Op_Minus      |
+| +a       | Op_Add        |
+| !a       | Op_Not        |
+
+Binary operator methods should have one argument and unary operator methods should have zero arguments.
+To support pre-operator methods (i.e. methods defined on `b` instead of `a`), then you can add the
+same method but prefixed with `Op_Pre` instead of just `Op_`. Note that the prefixes for binary
+and unary methods is the same and they are differentiated by their arguments. Therefore, to support
+both unary minus and binary minus (for example), you could write:
+
+```go
+func (t T) Op_MinusBinary(o T) T {
+  // ...
+}
+
+func (t T) Op_MinusUnary() T {
+  // ...
+}
+
+```
 
 # Not using go-operators
 There is much to say for not using go-operators. I already mentioned that it's
