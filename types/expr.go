@@ -702,6 +702,10 @@ func (check *checker) binary(x *operand, lhs, rhs ast.Expr, op token.Token, e as
 		return
 	}
 
+	if check.overloadBinaryOperator(x, &y, e) {
+		return
+	}
+
 	if isShift(op) {
 		check.shift(x, &y, op)
 		return
@@ -730,12 +734,6 @@ func (check *checker) binary(x *operand, lhs, rhs ast.Expr, op token.Token, e as
 		}
 		x.mode = invalid
 		return
-	}
-
-	if pred, ok := binaryOpPredicates[op]; ok {
-		if e != nil && !pred(x.typ) && check.overloadBinaryOperator(x, &y, e) {
-			return
-		}
 	}
 
 	if !check.op(binaryOpPredicates, x, op) {

@@ -80,7 +80,25 @@ func (check *checker) overloadOperandType(oper *operand) Type {
 	return oper.typ
 }
 
-func (check *checker) overloadLookupType(recv Type, oper Type, name string) (*Func, Type) {
+func (check *checker) withIgnoredErrors(f func()) bool {
+	err := check.firstErr
+	errorf := check.conf.Error
+
+	ret := true
+
+	check.conf.Error = func(error) {
+		ret = false
+	}
+
+	f()
+
+	check.firstErr = err
+	check.conf.Error = errorf
+
+	return ret
+}
+
+func (check *checker) overloadLookupType(recv Type, oper *operand, name string) (*Func, Type) {
 	ms := recv.MethodSet()
 
 	for i := 0; i < ms.Len(); i++ {
@@ -108,15 +126,25 @@ func (check *checker) overloadLookupType(recv Type, oper Type, name string) (*Fu
 
 		params := sig.Params()
 
-		if oper != Typ[Invalid] {
+		if oper != nil {
 			if params.Len() != 1 {
 				continue
 			}
 
 			pt := params.At(0)
 
-			// TODO: comparing string representation cannot be the best idea
-			if pt.Type().String() != oper.String() {
+			if isUntyped(oper.typ) {
+				mode := oper.mode
+
+				ok := check.withIgnoredErrors(func() {
+					check.convertUntyped(oper, pt.Type())
+				})
+
+				if !ok {
+					oper.mode = mode
+					continue
+				}
+			} else if pt.Type().String() != oper.typ.String() {
 				continue
 			}
 		} else if params.Len() != 0 {
@@ -132,7 +160,7 @@ func (check *checker) overloadLookupType(recv Type, oper Type, name string) (*Fu
 func (check *checker) overloadLookupAddressable(recv *operand, oper *operand, name string) (*Func, Type) {
 	if _, ok := recv.typ.(*Pointer); !ok {
 		if check.overloadIsAddressable(recv) {
-			return check.overloadLookupType(NewPointer(recv.typ), check.overloadOperandType(oper), name)
+			return check.overloadLookupType(NewPointer(recv.typ), oper, name)
 		}
 	}
 
@@ -140,17 +168,28 @@ func (check *checker) overloadLookupAddressable(recv *operand, oper *operand, na
 }
 
 func (check *checker) overloadLookup(recv *operand, oper *operand, name string) (*Func, Type) {
+	if isUntyped(recv.typ) {
+		return nil, Typ[Invalid]
+	}
+
 	// Try addressable first
 	f, tp := check.overloadLookupAddressable(recv, oper, name)
 
 	if f == nil {
-		f, tp = check.overloadLookupType(recv.typ, check.overloadOperandType(oper), name)
+		f, tp = check.overloadLookupType(recv.typ, oper, name)
 	}
 
 	return f, tp
 }
 
 func (check *checker) overloadBinaryOperator(x, y *operand, e ast.Expr) bool {
+	xuntyp := isUntyped(x.typ)
+	yuntyp := isUntyped(y.typ)
+
+	if xuntyp && yuntyp {
+		return false
+	}
+
 	be, ok := e.(*ast.BinaryExpr)
 
 	if !ok {
@@ -194,6 +233,10 @@ func (check *checker) overloadBinaryOperator(x, y *operand, e ast.Expr) bool {
 }
 
 func (check *checker) overloadUnaryOperator(x *operand, e ast.Expr) bool {
+	if isUntyped(x.typ) {
+		return false
+	}
+
 	ue, ok := e.(*ast.UnaryExpr)
 
 	if !ok {
