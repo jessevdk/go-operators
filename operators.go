@@ -35,10 +35,37 @@ func getSources(args []string) (dirname string, files []string) {
 
 		if info.IsDir() {
 			return args[0], nil
+		} else {
+			return path.Dir(args[0]), args
 		}
-	}
+	} else {
+		dirname := ""
 
-	return "", args
+		for _, f := range args {
+			info, err := os.Stat(f)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to check file `%s': %s\n", f, err)
+				os.Exit(1)
+			}
+
+			if info.IsDir() {
+				fmt.Fprintf(os.Stderr, "Specify files, not dirs...\n")
+				os.Exit(1)
+			}
+
+			d := path.Dir(f)
+
+			if len(dirname) == 0 {
+				dirname = d
+			} else if dirname != d {
+				fmt.Fprintf(os.Stderr, "Cannot parse files in separate packages")
+				os.Exit(1)
+			}
+		}
+
+		return dirname, args
+	}
 }
 
 func main() {
@@ -63,6 +90,9 @@ func main() {
 	}
 
 	dirname, files := getSources(args)
+	parseFiles := make([]string, 0, len(files))
+
+	filesmap := make(map[string]bool)
 
 	if len(dirname) != 0 {
 		p, err := build.ImportDir(dirname, 0)
@@ -73,20 +103,32 @@ func main() {
 		}
 
 		for _, f := range p.GoFiles {
-			files = append(files, path.Join(dirname, f))
+			parseFiles = append(parseFiles, path.Join(dirname, f))
+			filesmap[f] = true
+		}
+	}
+
+	for _, f := range files {
+		if _, ok := filesmap[f]; !ok {
+			filesmap[f] = true
+			parseFiles = append(parseFiles, f)
 		}
 	}
 
 	fs := token.NewFileSet()
-	afs := make([]*ast.File, 0, len(files))
+	afs := make([]*ast.File, 0, len(parseFiles))
 
-	for _, f := range files {
+	afsmap := make(map[string]*ast.File)
+
+	for _, f := range parseFiles {
 		af, err := parser.ParseFile(fs, f, nil, 0)
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error while parsing AST: %s\n", err)
 			os.Exit(1)
 		}
+
+		afsmap[f] = af
 
 		afs = append(afs, af)
 	}
@@ -106,8 +148,10 @@ func main() {
 
 	overloads := pp.Overloads()
 
-	for i, f := range afs {
-		f = replace(func(node ast.Node) ast.Node {
+	for i, f := range files {
+		ff := afsmap[f]
+
+		ff = replace(func(node ast.Node) ast.Node {
 			expr, ok := node.(ast.Expr)
 
 			if !ok {
@@ -138,9 +182,9 @@ func main() {
 			}
 
 			return call
-		}, f).(*ast.File)
+		}, ff).(*ast.File)
 
-		fn := path.Join(opts.Output, files[i])
+		fn := path.Join(opts.Output, f)
 		err := os.MkdirAll(path.Join(opts.Output, path.Dir(files[i])), 0766)
 
 		if err != nil {
@@ -161,6 +205,9 @@ func main() {
 			fmt.Println(fn)
 		}
 
-		format.Node(of, fs, f)
+		if err := format.Node(of, fs, ff); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write code: %s\n", err)
+			os.Exit(1)
+		}
 	}
 }
