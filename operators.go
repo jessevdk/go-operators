@@ -1,7 +1,7 @@
 package main
 
 import (
-	"./types"
+	"github.com/jessevdk/go-operators/types"
 	"fmt"
 	"github.com/jessevdk/go-flags"
 	"go/ast"
