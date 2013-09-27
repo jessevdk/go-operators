@@ -93,7 +93,7 @@ func main() {
 
 	pkgname := path.Base(dirname)
 
-	if len(pkgname) == 0 {
+	if len(pkgname) == 0 || len(dirname) == 0 {
 		pkgname = opts.Package
 	}
 
