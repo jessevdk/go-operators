@@ -68,7 +68,8 @@ func main() {
 		p, err := build.ImportDir(dirname, 0)
 
 		if err != nil {
-			panic(err)
+			fmt.Fprintf(os.Stderr, "Error while importing build: %s\n", err)
+			os.Exit(1)
 		}
 
 		for _, f := range p.GoFiles {
@@ -83,7 +84,8 @@ func main() {
 		af, err := parser.ParseFile(fs, f, nil, 0)
 
 		if err != nil {
-			panic(err)
+			fmt.Fprintf(os.Stderr, "Error while parsing AST: %s\n", err)
+			os.Exit(1)
 		}
 
 		afs = append(afs, af)
