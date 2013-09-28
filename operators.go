@@ -119,9 +119,16 @@ func checkTypes(pkgpath string, importpath string) *TypeCheck {
 	return ret
 }
 
-func resolvePackage(importpath string) *TypeCheck {
+func resolvePackage(importpath string, bool tryLocal) *TypeCheck {
 	if ret, ok := typechecks[importpath]; ok {
 		return ret
+	}
+
+	// Try local first
+	if tryLocal {
+		if _, err := os.Stat(importpath); err == nil {
+			return checkTypes(importpath, importpath)
+		}
 	}
 
 	paths := strings.Split(os.Getenv("GOPATH"), ":")
@@ -141,7 +148,7 @@ func resolvePackage(importpath string) *TypeCheck {
 
 func importSource(imports map[string]*types.Package, path string) (pkg *types.Package, err error) {
 	// Try from source
-	ct := resolvePackage(path)
+	ct := resolvePackage(path, false)
 
 	if ct == nil {
 		return nil, fmt.Errorf("Could not locate import path %s", path)
@@ -263,7 +270,7 @@ func main() {
 	}
 
 	for _, p := range packageDirs {
-		ct := resolvePackage(p)
+		ct := resolvePackage(p, true)
 		replaceOperators(ct)
 	}
 }
