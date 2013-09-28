@@ -143,6 +143,9 @@ func resolvePackage(importpath string, bool tryLocal) *TypeCheck {
 		return checkTypes(src, importpath)
 	}
 
+	fmt.Fprintf(os.Stderr, "Could not find package %s.\n", importpath)
+	os.Exit(1)
+
 	return nil
 }
 
