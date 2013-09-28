@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/jessevdk/go-operators/types"
 	"fmt"
 	"github.com/jessevdk/go-flags"
+	"github.com/jessevdk/go-operators/types"
 	"go/ast"
 	"go/build"
 	"go/format"
@@ -15,14 +15,14 @@ import (
 )
 
 type TypeCheck struct {
-	Path string
-	ImportPath string
-	Package *types.Package
-	FileSet *token.FileSet
+	Path         string
+	ImportPath   string
+	Package      *types.Package
+	FileSet      *token.FileSet
 	ParseFiles   []string
 	ProcessFiles []string
-	FilesToAst map[string]*ast.File
-	Ast []*ast.File
+	FilesToAst   map[string]*ast.File
+	Ast          []*ast.File
 }
 
 var typechecks = make(map[string]*TypeCheck)
@@ -105,14 +105,14 @@ func checkTypes(pkgpath string, importpath string) *TypeCheck {
 	}
 
 	ret := &TypeCheck{
-		Path: pkgpath,
-		Package: pp,
-		ImportPath: importpath,
-		ParseFiles: parse,
+		Path:         pkgpath,
+		Package:      pp,
+		ImportPath:   importpath,
+		ParseFiles:   parse,
 		ProcessFiles: process,
-		FileSet: fs,
-		Ast: afs,
-		FilesToAst: afsmap,
+		FileSet:      fs,
+		Ast:          afs,
+		FilesToAst:   afsmap,
 	}
 
 	typechecks[importpath] = ret
