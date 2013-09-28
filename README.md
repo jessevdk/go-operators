@@ -40,10 +40,14 @@ anything, but there must be extactly one return value. For overloaded binary
 operators there must be exactly one argument while for overloaded unary operators
 there must be exactly zero arguments.
 
-After you have defined these methods, you can simply use
-`go-operators --output OUTPUT_DIR SOURCE_DIR` to parse all go files in
-`SOURCE_DIR` and generate code in `OUTPUT_DIR`. This should replace all operators,
-where needed, with appropriate method calls.
+The `go-operators` tool uses a set of conventions to parse and process files
+for which to replace operators. Each file which needs to be processed should have
+the `.op.go` suffix. Furthermore, these files should have the `operators` build
+constraint (`// +build operators`). `go-operators` parses these files and
+generates a corresponding `.go` file (stripping the `.op.go` suffix) in the
+same directory, adding the `!operators` build constraint to avoid conflicts.
+You run `go-operators` with the import paths of the packages you want to process.
+These packages are obtained from `$GOPATH/src`.
 
 # List of overloaded operators
 
