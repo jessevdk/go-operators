@@ -11,9 +11,23 @@ import (
 	"go/token"
 	"os"
 	"path"
+	"strings"
 )
 
-func getSources(args []string) (dirname string, files []string) {
+type TypeCheck struct {
+	Path string
+	ImportPath string
+	Package *types.Package
+	FileSet *token.FileSet
+	ParseFiles   []string
+	ProcessFiles []string
+	FilesToAst map[string]*ast.File
+	Ast []*ast.File
+}
+
+var typechecks = make(map[string]*TypeCheck)
+
+func packageLocations(args []string) []string {
 	if len(args) == 0 {
 		dirname, err := os.Getwd()
 
@@ -22,105 +36,41 @@ func getSources(args []string) (dirname string, files []string) {
 			os.Exit(1)
 		}
 
-		return dirname, nil
+		return []string{dirname}
 	}
 
-	if len(args) == 1 {
-		info, err := os.Stat(args[0])
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to check file `%s': %s\n", args[0], err)
-			os.Exit(1)
-		}
-
-		if info.IsDir() {
-			return args[0], nil
-		} else {
-			return path.Dir(args[0]), args
-		}
-	} else {
-		dirname := ""
-
-		for _, f := range args {
-			info, err := os.Stat(f)
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to check file `%s': %s\n", f, err)
-				os.Exit(1)
-			}
-
-			if info.IsDir() {
-				fmt.Fprintf(os.Stderr, "Specify files, not dirs...\n")
-				os.Exit(1)
-			}
-
-			d := path.Dir(f)
-
-			if len(dirname) == 0 {
-				dirname = d
-			} else if dirname != d {
-				fmt.Fprintf(os.Stderr, "Cannot parse files in separate packages")
-				os.Exit(1)
-			}
-		}
-
-		return dirname, args
-	}
+	return args
 }
 
-func main() {
-	var opts struct {
-		Output  string `short:"o" long:"output" description:"Output directory (required)" required:"true"`
-		Verbose bool   `short:"v" long:"verbose" description:"Enable verbose mode"`
-		Package string `short:"p" long:"package" description:"Package name" default:"main"`
-	}
+func buildFiles(packageDir string) (parse []string, process []string, pkgname string) {
+	ctx := build.Default
 
-	fp := flags.NewParser(&opts, flags.Default)
-	fp.Usage = "--output OUTPUT_DIR [OPTIONS] SOURCE_DIR"
+	ctx.BuildTags = []string{"operators"}
 
-	args, err := fp.Parse()
+	p, err := ctx.ImportDir(packageDir, 0)
 
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error while importing build: %s\n", err)
 		os.Exit(1)
 	}
 
-	if err := os.MkdirAll(opts.Output, 0766); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create output directory: %s\n", err)
-		os.Exit(1)
-	}
+	for _, f := range p.GoFiles {
+		parse = append(parse, path.Join(packageDir, f))
 
-	dirname, files := getSources(args)
-	parseFiles := make([]string, 0, len(files))
-
-	filesmap := make(map[string]bool)
-
-	if len(dirname) != 0 {
-		p, err := build.ImportDir(dirname, 0)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error while importing build: %s\n", err)
-			os.Exit(1)
-		}
-
-		for _, f := range p.GoFiles {
-			parseFiles = append(parseFiles, path.Join(dirname, f))
-			filesmap[f] = true
+		if strings.HasSuffix(f, ".op.go") {
+			process = append(process, f)
 		}
 	}
+
+	return parse, process, p.Name
+}
+
+func parseAST(files []string) (fs *token.FileSet, afs []*ast.File, afsmap map[string]*ast.File) {
+	fs = token.NewFileSet()
+	afs = make([]*ast.File, 0, len(files))
+	afsmap = make(map[string]*ast.File)
 
 	for _, f := range files {
-		if _, ok := filesmap[f]; !ok {
-			filesmap[f] = true
-			parseFiles = append(parseFiles, f)
-		}
-	}
-
-	fs := token.NewFileSet()
-	afs := make([]*ast.File, 0, len(parseFiles))
-
-	afsmap := make(map[string]*ast.File)
-
-	for _, f := range parseFiles {
 		af, err := parser.ParseFile(fs, f, nil, 0)
 
 		if err != nil {
@@ -129,68 +79,144 @@ func main() {
 		}
 
 		afsmap[f] = af
-
 		afs = append(afs, af)
 	}
 
-	pkgname := path.Base(dirname)
+	return fs, afs, afsmap
+}
 
-	if len(pkgname) == 0 || len(dirname) == 0 {
-		pkgname = opts.Package
+func checkTypes(pkgpath string, importpath string) *TypeCheck {
+	if ret, ok := typechecks[importpath]; ok {
+		return ret
 	}
 
-	pp, err := types.Check(pkgname, fs, afs)
+	parse, process, pkgname := buildFiles(pkgpath)
+	fs, afs, afsmap := parseAST(parse)
+
+	var conf types.Config
+
+	conf.Import = importSources
+
+	pp, err := conf.Check(pkgname, fs, afs, nil)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error while parsing: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error while type checking: %s\n", err)
 		os.Exit(1)
 	}
 
-	overloads := pp.Overloads()
+	ret := &TypeCheck{
+		Path: pkgpath,
+		Package: pp,
+		ImportPath: importpath,
+		ParseFiles: parse,
+		ProcessFiles: process,
+		FileSet: fs,
+		Ast: afs,
+		FilesToAst: afsmap,
+	}
 
-	for i, f := range files {
-		ff := afsmap[f]
+	typechecks[importpath] = ret
+	return ret
+}
 
-		ff = replace(func(node ast.Node) ast.Node {
-			expr, ok := node.(ast.Expr)
+func resolvePackage(importpath string) *TypeCheck {
+	if ret, ok := typechecks[importpath]; ok {
+		return ret
+	}
 
-			if !ok {
-				return node
-			}
+	paths := strings.Split(os.Getenv("GOPATH"), ":")
 
-			info, ok := overloads[expr]
+	for _, p := range paths {
+		src := path.Join(p, "src", importpath)
 
-			if !ok {
-				return node
-			}
-
-			sel := &ast.SelectorExpr{
-				X:   info.Recv,
-				Sel: ast.NewIdent(info.Func.Name()),
-			}
-
-			args := []ast.Expr{}
-
-			if info.Oper != nil {
-				args = append(args, info.Oper)
-			}
-
-			// Create function call expression
-			call := &ast.CallExpr{
-				Fun:  sel,
-				Args: args,
-			}
-
-			return call
-		}, ff).(*ast.File)
-
-		fn := path.Join(opts.Output, f)
-		err := os.MkdirAll(path.Join(opts.Output, path.Dir(files[i])), 0766)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to create output directory: %s\n", err)
-			os.Exit(1)
+		if _, err := os.Stat(src); err != nil {
+			continue
 		}
+
+		return checkTypes(src, importpath)
+	}
+
+	return nil
+}
+
+func importSource(imports map[string]*types.Package, path string) (pkg *types.Package, err error) {
+	// Try from source
+	ct := resolvePackage(path)
+
+	if ct == nil {
+		return nil, fmt.Errorf("Could not locate import path %s", path)
+	}
+
+	imports[ct.ImportPath] = ct.Package
+	return ct.Package, nil
+
+}
+
+func importSources(imports map[string]*types.Package, path string) (pkg *types.Package, err error) {
+	if operatorPackages[path] {
+		return importSource(imports, path)
+	}
+
+	pkg, err = types.GcImport(imports, path)
+
+	if err != nil {
+		if path == "C" {
+			return nil, fmt.Errorf("go-operators does not have support for packages that use cgo at the moment")
+		}
+
+		return importSource(imports, path)
+	}
+
+	return pkg, err
+}
+
+func replacer(overloads map[ast.Expr]types.OverloadInfo, node ast.Node) ast.Node {
+	expr, ok := node.(ast.Expr)
+
+	if !ok {
+		return node
+	}
+
+	info, ok := overloads[expr]
+
+	if !ok {
+		return node
+	}
+
+	sel := &ast.SelectorExpr{
+		X:   info.Recv,
+		Sel: ast.NewIdent(info.Func.Name()),
+	}
+
+	args := []ast.Expr{}
+
+	if info.Oper != nil {
+		args = append(args, info.Oper)
+	}
+
+	// Create function call expression
+	call := &ast.CallExpr{
+		Fun:  sel,
+		Args: args,
+	}
+
+	return call
+}
+
+func replaceOperators(ct *TypeCheck) {
+	overloads := ct.Package.Overloads()
+
+	for _, f := range ct.ProcessFiles {
+		af := ct.FilesToAst[path.Join(ct.Path, f)]
+
+		af = replace(func(node ast.Node) ast.Node {
+			return replacer(overloads, node)
+		}, af).(*ast.File)
+
+		suffix := ".op.go"
+		outname := f[:len(f)-len(suffix)] + ".go"
+
+		fn := path.Join(ct.Path, outname)
 
 		of, err := os.Create(fn)
 
@@ -205,9 +231,39 @@ func main() {
 			fmt.Println(fn)
 		}
 
-		if err := format.Node(of, fs, ff); err != nil {
+		// Write build constraint
+		fmt.Fprintln(of, "// +build !operators\n")
+
+		if err := format.Node(of, ct.FileSet, af); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to write code: %s\n", err)
 			os.Exit(1)
 		}
+	}
+}
+
+var opts struct {
+	Verbose bool `short:"v" long:"verbose" description:"Enable verbose mode"`
+}
+
+var operatorPackages = make(map[string]bool)
+
+func main() {
+	fp := flags.NewParser(&opts, flags.Default)
+
+	args, err := fp.Parse()
+
+	if err != nil {
+		os.Exit(1)
+	}
+
+	packageDirs := packageLocations(args)
+
+	for _, p := range packageDirs {
+		operatorPackages[p] = true
+	}
+
+	for _, p := range packageDirs {
+		ct := resolvePackage(p)
+		replaceOperators(ct)
 	}
 }
