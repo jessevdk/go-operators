@@ -119,7 +119,7 @@ func checkTypes(pkgpath string, importpath string) *TypeCheck {
 	return ret
 }
 
-func resolvePackage(importpath string, bool tryLocal) *TypeCheck {
+func resolvePackage(importpath string, tryLocal bool) *TypeCheck {
 	if ret, ok := typechecks[importpath]; ok {
 		return ret
 	}
