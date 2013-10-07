@@ -164,6 +164,10 @@ func importSource(imports map[string]*types.Package, path string) (pkg *types.Pa
 
 func importSources(imports map[string]*types.Package, path string) (pkg *types.Package, err error) {
 	if operatorPackages[path] {
+		if pkg, ok := imports[path]; ok {
+			return pkg, nil
+		}
+
 		return importSource(imports, path)
 	}
 
