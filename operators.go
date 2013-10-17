@@ -150,6 +150,10 @@ func resolvePackage(importpath string, tryLocal bool) *TypeCheck {
 }
 
 func importSource(imports map[string]*types.Package, path string) (pkg *types.Package, err error) {
+	if pkg, ok := imports[path]; ok {
+		return pkg, nil
+	}
+
 	// Try from source
 	ct := resolvePackage(path, false)
 
@@ -164,10 +168,6 @@ func importSource(imports map[string]*types.Package, path string) (pkg *types.Pa
 
 func importSources(imports map[string]*types.Package, path string) (pkg *types.Package, err error) {
 	if operatorPackages[path] {
-		if pkg, ok := imports[path]; ok {
-			return pkg, nil
-		}
-
 		return importSource(imports, path)
 	}
 
