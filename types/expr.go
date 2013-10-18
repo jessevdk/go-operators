@@ -79,7 +79,7 @@ func (check *checker) op(m opPredicates, x *operand, op token.Token) bool {
 	return true
 }
 
-func (check *checker) unary(x *operand, op token.Token) {
+func (check *checker) unary(x *operand, op token.Token, e ast.Expr) {
 	switch op {
 	case token.AND:
 		// spec: "As an exception to the addressability
@@ -110,6 +110,12 @@ func (check *checker) unary(x *operand, op token.Token) {
 		x.mode = commaok
 		x.typ = typ.elt
 		return
+	}
+
+	if pred, ok := unaryOpPredicates[op]; ok {
+		if !pred(x.typ) && e != nil && check.overloadUnaryOperator(x, e) {
+			return
+		}
 	}
 
 	if !check.op(unaryOpPredicates, x, op) {
@@ -702,7 +708,7 @@ var binaryOpPredicates = opPredicates{
 	token.LOR:  isBoolean,
 }
 
-func (check *checker) binary(x *operand, lhs, rhs ast.Expr, op token.Token) {
+func (check *checker) binary(x *operand, lhs, rhs ast.Expr, op token.Token, e ast.Expr) {
 	var y operand
 
 	check.expr(x, lhs)
@@ -714,6 +720,10 @@ func (check *checker) binary(x *operand, lhs, rhs ast.Expr, op token.Token) {
 	if y.mode == invalid {
 		x.mode = invalid
 		x.expr = y.expr
+		return
+	}
+
+	if check.overloadBinaryOperator(x, &y, e) {
 		return
 	}
 
@@ -1336,7 +1346,7 @@ func (check *checker) exprInternal(x *operand, e ast.Expr, hint Type) exprKind {
 		if x.mode == invalid {
 			goto Error
 		}
-		check.unary(x, e.Op)
+		check.unary(x, e.Op, e)
 		if x.mode == invalid {
 			goto Error
 		}
@@ -1346,7 +1356,7 @@ func (check *checker) exprInternal(x *operand, e ast.Expr, hint Type) exprKind {
 		}
 
 	case *ast.BinaryExpr:
-		check.binary(x, e.X, e.Y, e.Op)
+		check.binary(x, e.X, e.Y, e.Op, e)
 		if x.mode == invalid {
 			goto Error
 		}

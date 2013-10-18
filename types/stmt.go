@@ -174,7 +174,7 @@ func (check *checker) stmt(ctxt stmtContext, s ast.Stmt) {
 		}
 		var x operand
 		Y := &ast.BasicLit{ValuePos: s.X.Pos(), Kind: token.INT, Value: "1"} // use x's position
-		check.binary(&x, s.X, Y, op)
+		check.binary(&x, s.X, Y, op, nil)
 		if x.mode == invalid {
 			return
 		}
@@ -206,7 +206,7 @@ func (check *checker) stmt(ctxt stmtContext, s ast.Stmt) {
 				return
 			}
 			var x operand
-			check.binary(&x, s.Lhs[0], s.Rhs[0], op)
+			check.binary(&x, s.Lhs[0], s.Rhs[0], op, nil)
 			if x.mode == invalid {
 				return
 			}

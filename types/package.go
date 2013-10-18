@@ -4,6 +4,8 @@
 
 package types
 
+import "go/ast"
+
 // A Package describes a Go package.
 type Package struct {
 	path     string
@@ -12,13 +14,16 @@ type Package struct {
 	complete bool
 	imports  []*Package
 	fake     bool // scope lookup errors are silently dropped if package is fake (internal use only)
+
+	// overloaded operators
+	overloads map[ast.Expr]OverloadInfo
 }
 
 // NewPackage returns a new Package for the given package path,
 // name, and scope. The package is not complete and contains no
 // explicit imports.
 func NewPackage(path, name string, scope *Scope) *Package {
-	return &Package{path: path, name: name, scope: scope}
+	return &Package{path: path, name: name, scope: scope, overloads: make(map[ast.Expr]OverloadInfo)}
 }
 
 // Path returns the package path.
@@ -39,3 +44,5 @@ func (pkg *Package) Complete() bool { return pkg.complete }
 // Imports returns the list of packages explicitly imported by
 // pkg; the list is in source order. Package unsafe is excluded.
 func (pkg *Package) Imports() []*Package { return pkg.imports }
+
+func (pkg *Package) Overloads() map[ast.Expr]OverloadInfo { return pkg.overloads }
