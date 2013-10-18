@@ -45,6 +45,7 @@ var (
 
 // Each tests entry is list of files belonging to the same package.
 var tests = [][]string{
+	{"testdata/errors.src"},
 	{"testdata/importdecl0a.src", "testdata/importdecl0b.src"},
 	{"testdata/cycles.src"},
 	{"testdata/decls0.src"},
@@ -65,6 +66,8 @@ var tests = [][]string{
 	{"testdata/conversions.src"},
 	{"testdata/stmt0.src"},
 	{"testdata/stmt1.src"},
+	{"testdata/gotos.src"},
+	{"testdata/labels.src"},
 }
 
 var fset = token.NewFileSet()
@@ -107,10 +110,11 @@ func parseFiles(t *testing.T, filenames []string) ([]*ast.File, []error) {
 	return files, errlist
 }
 
-// ERROR comments must be of the form /* ERROR "rx" */ and rx is
-// a regular expression that matches the expected error message.
+// ERROR comments must start with text `ERROR "rx"` or `ERROR rx` where
+// rx is a regular expression that matches the expected error message.
+// Space around "rx" or rx is ignored.
 //
-var errRx = regexp.MustCompile(`^/\* *ERROR *"([^"]*)" *\*/$`)
+var errRx = regexp.MustCompile(`^ *ERROR *"?([^"]*)"?`)
 
 // errMap collects the regular expressions of ERROR comments found
 // in files and returns them as a map of error positions to error messages.
@@ -137,8 +141,11 @@ func errMap(t *testing.T, testname string, files []*ast.File) map[string][]strin
 			case token.EOF:
 				break scanFile
 			case token.COMMENT:
-				if s := errRx.FindStringSubmatch(lit); len(s) == 2 {
-					errmap[prev] = append(errmap[prev], s[1])
+				if lit[1] == '*' {
+					lit = lit[:len(lit)-2] // strip trailing */
+				}
+				if s := errRx.FindStringSubmatch(lit[2:]); len(s) == 2 {
+					errmap[prev] = append(errmap[prev], strings.TrimSpace(s[1]))
 				}
 			case token.SEMICOLON:
 				// ignore automatically inserted semicolon
@@ -240,18 +247,9 @@ func checkFiles(t *testing.T, testfiles []string) {
 	}
 }
 
-var testBuiltinsDeclared = false
-
 func TestCheck(t *testing.T) {
 	// Declare builtins for testing.
-	// Not done in an init func to avoid an init race with
-	// the construction of the Universe var.
-	if !testBuiltinsDeclared {
-		testBuiltinsDeclared = true
-		// Pkg == nil for Universe objects
-		def(NewFunc(token.NoPos, nil, "assert", &Builtin{_Assert, "assert", 1, false, true}))
-		def(NewFunc(token.NoPos, nil, "trace", &Builtin{_Trace, "trace", 0, true, true}))
-	}
+	defPredeclaredTestFuncs()
 
 	// If explicit test files are specified, only check those.
 	if files := *testFiles; files != "" {

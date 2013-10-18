@@ -89,7 +89,16 @@ func (check *checker) ident(x *operand, e *ast.Ident, def *Named, cycleOk bool) 
 		x.mode = variable
 
 	case *Func:
-		obj.used = true // use dot-imported function
+		obj.used = true
+		x.mode = value
+
+	case *Builtin:
+		obj.used = true // for built-ins defined by package unsafe
+		x.mode = builtin
+		x.id = obj.id
+
+	case *Nil:
+		// no need to "use" the nil object
 		x.mode = value
 
 	default:
@@ -112,8 +121,8 @@ func (check *checker) typ(e ast.Expr, def *Named, cycleOk bool) Type {
 		check.indent++
 	}
 
-	t := check.typ0(e, def, cycleOk)
-	assert(e != nil && t != nil && !isUntyped(t))
+	t := check.typInternal(e, def, cycleOk)
+	assert(e != nil && t != nil && isTyped(t))
 
 	check.recordTypeAndValue(e, t, nil)
 
@@ -186,10 +195,10 @@ func (check *checker) funcType(recv *ast.FieldList, ftyp *ast.FuncType, def *Nam
 	return sig
 }
 
-// typ0 contains the core of type checking of types.
+// typInternal contains the core of type checking of types.
 // Must only be called by typ.
 //
-func (check *checker) typ0(e ast.Expr, def *Named, cycleOk bool) Type {
+func (check *checker) typInternal(e ast.Expr, def *Named, cycleOk bool) Type {
 	switch e := e.(type) {
 	case *ast.BadExpr:
 		// ignore - error reported before
@@ -348,7 +357,7 @@ func (check *checker) typOrNil(e ast.Expr) Type {
 		check.errorf(x.pos(), "%s used as type", &x)
 	case typexpr:
 		return x.typ
-	case constant:
+	case value:
 		if x.isNil() {
 			return nil
 		}
@@ -410,7 +419,6 @@ func (check *checker) collectMethods(recv Type, list *ast.FieldList, cycleOk boo
 	var mset objset
 
 	for _, f := range list.List {
-		// TODO(gri) Consider calling funcType here.
 		typ := check.typ(f.Type, nil, cycleOk)
 		// the parser ensures that f.Tag is nil and we don't
 		// care if a constructed AST contains a non-nil tag

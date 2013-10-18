@@ -49,7 +49,7 @@ type checker struct {
 	// functions
 	funcList []funcInfo // list of functions/methods with correct signatures and non-empty bodies
 	funcSig  *Signature // signature of currently type-checked function
-	labels   *Scope     // label scope of currently type-checked function; lazily allocated
+	hasLabel bool       // set if a function makes use of labels (only ~1% of functions)
 
 	// debugging
 	indent int // indentation for tracing
@@ -78,8 +78,26 @@ func (check *checker) recordTypeAndValue(x ast.Expr, typ Type, val exact.Value) 
 	}
 }
 
+func (check *checker) recordBuiltinType(f ast.Expr, sig *Signature) {
+	// f must be a (possibly parenthesized) identifier denoting a built-in
+	// (built-ins in package unsafe always produce a constant result and
+	// we don't record their signatures, so we don't see qualified idents
+	// here): record the signature for f and possible children.
+	for {
+		check.recordTypeAndValue(f, sig, nil)
+		switch p := f.(type) {
+		case *ast.Ident:
+			return // we're done
+		case *ast.ParenExpr:
+			f = p.X
+		default:
+			unreachable()
+		}
+	}
+}
+
 func (check *checker) recordCommaOkTypes(x ast.Expr, t1, t2 Type) {
-	assert(x != nil && !isUntyped(t1) && !isUntyped(t2) && isBoolean(t2))
+	assert(x != nil && isTyped(t1) && isTyped(t2) && isBoolean(t2))
 	if m := check.Types; m != nil {
 		assert(m[x] != nil) // should have been recorded already
 		pos := x.Pos()
@@ -181,8 +199,8 @@ func (conf *Config) check(pkgPath string, fset *token.FileSet, files []*ast.File
 	// remaining untyped expressions must indeed be untyped
 	if debug {
 		for x, info := range check.untyped {
-			if !isUntyped(info.typ) {
-				check.dump("%s: %s (type %s) is not untyped", x.Pos(), x, info.typ)
+			if isTyped(info.typ) {
+				check.dump("%s: %s (type %s) is typed", x.Pos(), x, info.typ)
 				panic(0)
 			}
 		}

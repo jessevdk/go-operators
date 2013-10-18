@@ -11,20 +11,32 @@ import (
 	"go/token"
 )
 
-func (check *checker) optionalStmt(s ast.Stmt) {
+// stmtContext is a bitset describing the environment
+// (outer statements) containing a statement.
+type stmtContext uint
+
+const (
+	fallthroughOk stmtContext = 1 << iota
+	inBreakable
+	inContinuable
+)
+
+func (check *checker) initStmt(s ast.Stmt) {
 	if s != nil {
-		scope := check.topScope
-		check.stmt(s, false)
-		assert(check.topScope == scope)
+		check.stmt(0, s)
 	}
 }
 
-func (check *checker) stmtList(list []ast.Stmt, fallthroughOk bool) {
-	scope := check.topScope
+func (check *checker) stmtList(ctxt stmtContext, list []ast.Stmt) {
+	ok := ctxt&fallthroughOk != 0
+	inner := ctxt &^ fallthroughOk
 	for i, s := range list {
-		check.stmt(s, fallthroughOk && i+1 == len(list))
+		inner := inner
+		if ok && i+1 == len(list) {
+			inner |= fallthroughOk
+		}
+		check.stmt(inner, s)
 	}
-	assert(check.topScope == scope)
 }
 
 func (check *checker) multipleDefaults(list []ast.Stmt) {
@@ -53,10 +65,10 @@ func (check *checker) multipleDefaults(list []ast.Stmt) {
 	}
 }
 
-func (check *checker) openScope(node ast.Node) {
-	s := NewScope(check.topScope)
-	check.recordScope(node, s)
-	check.topScope = s
+func (check *checker) openScope(s ast.Stmt) {
+	scope := NewScope(check.topScope)
+	check.recordScope(s, scope)
+	check.topScope = scope
 }
 
 func (check *checker) closeScope() {
@@ -71,12 +83,40 @@ func assignOp(op token.Token) token.Token {
 	return token.ILLEGAL
 }
 
+func (check *checker) suspendedCall(keyword string, call *ast.CallExpr) {
+	var x operand
+	var msg string
+	switch check.rawExpr(&x, call, nil) {
+	case conversion:
+		msg = "requires function call, not conversion"
+	case expression:
+		msg = "discards result of"
+	case statement:
+		return
+	default:
+		unreachable()
+	}
+	check.errorf(x.pos(), "%s %s %s", keyword, msg, &x)
+}
+
 // stmt typechecks statement s.
-func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
+func (check *checker) stmt(ctxt stmtContext, s ast.Stmt) {
 	// statements cannot use iota in general
 	// (constant declarations set it explicitly)
 	assert(check.iota == nil)
 
+	// statements must end with the same top scope as they started with
+	if debug {
+		defer func(scope *Scope) {
+			// don't check if code is panicking
+			if p := recover(); p != nil {
+				panic(p)
+			}
+			assert(scope == check.topScope)
+		}(check.topScope)
+	}
+
+	inner := ctxt &^ fallthroughOk
 	switch s := s.(type) {
 	case *ast.BadStmt, *ast.EmptyStmt:
 		// ignore
@@ -85,49 +125,28 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 		check.declStmt(s.Decl)
 
 	case *ast.LabeledStmt:
-		scope := check.labels
-		if scope == nil {
-			scope = NewScope(nil) // no label scope chain
-			check.labels = scope
-		}
-		label := s.Label
-		l := NewLabel(label.Pos(), label.Name)
-		// Labels are not resolved yet - mark them as used to avoid errors.
-		// TODO(gri) fix this
-		l.used = true
-		check.declareObj(scope, label, l)
-		check.stmt(s.Stmt, fallthroughOk)
+		check.hasLabel = true
+		check.stmt(ctxt, s.Stmt)
 
 	case *ast.ExprStmt:
+		// spec: "With the exception of specific built-in functions,
+		// function and method calls and receive operations can appear
+		// in statement context. Such statements may be parenthesized."
 		var x operand
-		used := false
-		switch e := unparen(s.X).(type) {
-		case *ast.CallExpr:
-			// function calls are permitted
-			used = true
-			// but some builtins are excluded
-			// (Caution: This evaluates e.Fun twice, once here and once
-			//           below as part of s.X. Perhaps this can be avoided.)
-			check.expr(&x, e.Fun)
-			if x.mode != invalid {
-				if b, ok := x.typ.(*Builtin); ok && !b.isStatement {
-					used = false
-				}
+		kind := check.rawExpr(&x, s.X, nil)
+		var msg string
+		switch x.mode {
+		default:
+			if kind == statement {
+				return
 			}
-		case *ast.UnaryExpr:
-			// receive operations are permitted
-			if e.Op == token.ARROW {
-				used = true
-			}
+			msg = "is not used"
+		case builtin:
+			msg = "must be called"
+		case typexpr:
+			msg = "is not an expression"
 		}
-		if !used {
-			check.errorf(s.Pos(), "%s not used", s.X)
-			// ok to continue
-		}
-		check.rawExpr(&x, s.X, nil)
-		if x.mode == typexpr {
-			check.errorf(x.pos(), "%s is not an expression", &x)
-		}
+		check.errorf(x.pos(), "%s %s", &x, msg)
 
 	case *ast.SendStmt:
 		var ch, x operand
@@ -155,7 +174,7 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 		}
 		var x operand
 		Y := &ast.BasicLit{ValuePos: s.X.Pos(), Kind: token.INT, Value: "1"} // use x's position
-		check.binary(&x, s.X, Y, op, nil)
+		check.binary(&x, s.X, Y, op)
 		if x.mode == invalid {
 			return
 		}
@@ -187,7 +206,7 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 				return
 			}
 			var x operand
-			check.binary(&x, s.Lhs[0], s.Rhs[0], op, nil)
+			check.binary(&x, s.Lhs[0], s.Rhs[0], op)
 			if x.mode == invalid {
 				return
 			}
@@ -195,14 +214,10 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 		}
 
 	case *ast.GoStmt:
-		var x operand
-		check.call(&x, s.Call)
-		// TODO(gri) If a builtin is called, the builtin must be valid in this context.
+		check.suspendedCall("go", s.Call)
 
 	case *ast.DeferStmt:
-		var x operand
-		check.call(&x, s.Call)
-		// TODO(gri) If a builtin is called, the builtin must be valid in this context.
+		check.suspendedCall("defer", s.Call)
 
 	case *ast.ReturnStmt:
 		sig := check.funcSig
@@ -226,45 +241,50 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 		}
 
 	case *ast.BranchStmt:
+		if s.Label != nil {
+			check.hasLabel = true
+			return // checked in 2nd pass (check.labels)
+		}
 		switch s.Tok {
 		case token.BREAK:
-			// TODO(gri) implement checks
-		case token.CONTINUE:
-			// TODO(gri) implement checks
-		case token.GOTO:
-			// TODO(gri) implement checks
-		case token.FALLTHROUGH:
-			if s.Label != nil {
-				check.invalidAST(s.Label.Pos(), "fallthrough statement cannot have label")
-				// ok to continue
+			if ctxt&inBreakable == 0 {
+				check.errorf(s.Pos(), "break not in for, switch, or select statement")
 			}
-			if !fallthroughOk {
+		case token.CONTINUE:
+			if ctxt&inContinuable == 0 {
+				check.errorf(s.Pos(), "continue not in for statement")
+			}
+		case token.FALLTHROUGH:
+			if ctxt&fallthroughOk == 0 {
 				check.errorf(s.Pos(), "fallthrough statement out of place")
 			}
 		default:
-			check.invalidAST(s.Pos(), "unknown branch statement (%s)", s.Tok)
+			check.invalidAST(s.Pos(), "branch statement: %s", s.Tok)
 		}
 
 	case *ast.BlockStmt:
 		check.openScope(s)
-		check.stmtList(s.List, false)
+		check.stmtList(inner, s.List)
 		check.closeScope()
 
 	case *ast.IfStmt:
 		check.openScope(s)
-		check.optionalStmt(s.Init)
+		check.initStmt(s.Init)
 		var x operand
 		check.expr(&x, s.Cond)
 		if x.mode != invalid && !isBoolean(x.typ) {
 			check.errorf(s.Cond.Pos(), "non-boolean condition in if statement")
 		}
-		check.stmt(s.Body, false)
-		check.optionalStmt(s.Else)
+		check.stmt(inner, s.Body)
+		if s.Else != nil {
+			check.stmt(inner, s.Else)
+		}
 		check.closeScope()
 
 	case *ast.SwitchStmt:
+		inner |= inBreakable
 		check.openScope(s)
-		check.optionalStmt(s.Init)
+		check.initStmt(s.Init)
 		var x operand
 		tag := s.Tag
 		if tag == nil {
@@ -325,15 +345,20 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 				}
 			}
 			check.openScope(clause)
-			check.stmtList(clause.Body, i+1 < len(s.Body.List))
+			inner := inner
+			if i+1 < len(s.Body.List) {
+				inner |= fallthroughOk
+			}
+			check.stmtList(inner, clause.Body)
 			check.closeScope()
 		}
 		check.closeScope()
 
 	case *ast.TypeSwitchStmt:
+		inner |= inBreakable
 		check.openScope(s)
 		defer check.closeScope()
-		check.optionalStmt(s.Init)
+		check.initStmt(s.Init)
 
 		// A type switch guard must be of the form:
 		//
@@ -419,7 +444,7 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 				check.declareObj(check.topScope, nil, obj)
 				check.recordImplicit(clause, obj)
 			}
-			check.stmtList(clause.Body, false)
+			check.stmtList(inner, clause.Body)
 			check.closeScope()
 		}
 		// If a lhs variable was declared but there were no case clauses, make sure
@@ -433,6 +458,7 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 		}
 
 	case *ast.SelectStmt:
+		inner |= inBreakable
 		check.multipleDefaults(s.Body.List)
 		for _, s := range s.Body.List {
 			clause, _ := s.(*ast.CommClause)
@@ -440,14 +466,17 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 				continue // error reported before
 			}
 			check.openScope(clause)
-			check.optionalStmt(clause.Comm) // TODO(gri) check correctness of c.Comm (must be Send/RecvStmt)
-			check.stmtList(clause.Body, false)
+			if s := clause.Comm; s != nil {
+				check.stmt(inner, s) // TODO(gri) check correctness of c.Comm (must be Send/RecvStmt)
+			}
+			check.stmtList(inner, clause.Body)
 			check.closeScope()
 		}
 
 	case *ast.ForStmt:
+		inner |= inBreakable | inContinuable
 		check.openScope(s)
-		check.optionalStmt(s.Init)
+		check.initStmt(s.Init)
 		if s.Cond != nil {
 			var x operand
 			check.expr(&x, s.Cond)
@@ -455,11 +484,12 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 				check.errorf(s.Cond.Pos(), "non-boolean condition in for statement")
 			}
 		}
-		check.optionalStmt(s.Post)
-		check.stmt(s.Body, false)
+		check.initStmt(s.Post)
+		check.stmt(inner, s.Body)
 		check.closeScope()
 
 	case *ast.RangeStmt:
+		inner |= inBreakable | inContinuable
 		check.openScope(s)
 		defer check.closeScope()
 
@@ -471,7 +501,7 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 			// if we don't have a declaration, we can still check the loop's body
 			// (otherwise we can't because we are missing the declared variables)
 			if !decl {
-				check.stmt(s.Body, false)
+				check.stmt(inner, s.Body)
 			}
 			return
 		}
@@ -481,18 +511,18 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 		switch typ := x.typ.Underlying().(type) {
 		case *Basic:
 			if isString(typ) {
-				key = Typ[UntypedInt]
-				val = Typ[UntypedRune]
+				key = Typ[Int]
+				val = Typ[Rune]
 			}
 		case *Array:
-			key = Typ[UntypedInt]
+			key = Typ[Int]
 			val = typ.elt
 		case *Slice:
-			key = Typ[UntypedInt]
+			key = Typ[Int]
 			val = typ.elt
 		case *Pointer:
 			if typ, _ := typ.base.Underlying().(*Array); typ != nil {
-				key = Typ[UntypedInt]
+				key = Typ[Int]
 				val = typ.elt
 			}
 		case *Map:
@@ -515,7 +545,7 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 			check.errorf(x.pos(), "cannot range over %s", &x)
 			// if we don't have a declaration, we can still check the loop's body
 			if !decl {
-				check.stmt(s.Body, false)
+				check.stmt(inner, s.Body)
 			}
 			return
 		}
@@ -577,7 +607,7 @@ func (check *checker) stmt(s ast.Stmt, fallthroughOk bool) {
 			}
 		}
 
-		check.stmt(s.Body, false)
+		check.stmt(inner, s.Body)
 
 	default:
 		check.errorf(s.Pos(), "invalid statement")

@@ -188,7 +188,7 @@ func (p *gcParser) init(filename, id string, src io.Reader, imports map[string]*
 		// check consistency of imports map
 		for _, pkg := range imports {
 			if pkg.name == "" {
-				fmt.Printf("no package name for %s\n", pkg.Path)
+				fmt.Printf("no package name for %s\n", pkg.path)
 			}
 		}
 	}
@@ -349,13 +349,18 @@ func (p *gcParser) parseDotIdent() string {
 	return ident
 }
 
-// QualifiedName = "@" PackageId "." dotIdentifier .
+// QualifiedName = "@" PackageId "." ( "?" | dotIdentifier ) .
 //
 func (p *gcParser) parseQualifiedName() (id, name string) {
 	p.expect('@')
 	id = p.parsePackageId()
 	p.expect('.')
-	name = p.parseDotIdent()
+	// Per rev f280b8a485fd (10/2/2013), qualified names may be used for anoymous fields.
+	if p.tok == '?' {
+		p.next()
+	} else {
+		name = p.parseDotIdent()
+	}
 	return
 }
 
@@ -479,7 +484,7 @@ func (p *gcParser) parseField() (*Var, string) {
 			pkg = nil
 			name = typ.name
 		case *Named:
-			pkg = typ.obj.pkg
+			pkg = typ.obj.pkg // TODO(gri) is this still correct?
 			name = typ.obj.name
 		default:
 			p.errorf("anonymous field expected")

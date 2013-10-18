@@ -67,10 +67,10 @@ func assignments1() {
 
 	// test cases for issue 5800
 	var (
-		_ int = nil /* ERROR "cannot convert nil" */
-		_ [10]int = nil /* ERROR "cannot convert nil" */
+		_ int = nil /* ERROR "untyped nil value" */
+		_ [10]int = nil /* ERROR "untyped nil value" */
 		_ []byte = nil
-		_ struct{} = nil /* ERROR "cannot convert nil" */
+		_ struct{} = nil /* ERROR "untyped nil value" */
 		_ func() = nil
 		_ map[int]string = nil
 		_ chan int = nil
@@ -90,6 +90,49 @@ func assignments1() {
 	_ = nil /* ERROR "use of untyped nil" */
 	_ = 1<<1000 // TODO(gri) this should fail
 	(_) = 0
+}
+
+func assignments2() {
+	var m map[string][]bool
+	var s []bool
+	var b bool
+	_ = s
+	_ = b
+
+	// assignments to map index expressions are ok
+	s, b = m["foo"]
+	m["foo"] = nil
+	m["foo"] = nil /* ERROR assignment count mismatch */ , false
+	_ = append(m["foo"])
+	_ = append(m["foo"], true)
+
+	var c chan int
+	_, b = <-c
+	<- /* ERROR cannot assign */ c = 0
+	<-c = 0 /* ERROR assignment count mismatch */ , false
+
+	var x interface{}
+	_, b = x.(int)
+	x /* ERROR cannot assign */ .(int) = 0
+	x.(int) = 0 /* ERROR assignment count mismatch */ , false
+
+	assignments2 /* ERROR used as value */ () = nil
+	int /* ERROR not an expression */ = 0
+}
+
+func issue6487() {
+	type S struct{x int}
+	_ = &S /* ERROR "cannot take address" */ {}.x
+	_ = &( /* ERROR "cannot take address" */ S{}.x)
+	_ = (&S{}).x
+	S /* ERROR "cannot assign" */ {}.x = 0
+	(&S{}).x = 0
+
+	type M map[string]S
+	var m M
+	m /* ERROR "cannot assign" */ ["foo"].x = 0
+	_ = &( /* ERROR "cannot take address" */ m["foo"].x)
+	_ = &m /* ERROR "cannot take address" */ ["foo"].x
 }
 
 func shortVarDecls() {
@@ -149,18 +192,147 @@ func selects() {
 
 func gos() {
 	go 1 /* ERROR "expected function/method call" */
+	go int /* ERROR "go requires function call, not conversion" */ (0)
 	go gos()
 	var c chan int
 	go close(c)
-	go len(c) // TODO(gri) this should not be legal
+	go len /* ERROR "go discards result" */ (c)
 }
 
 func defers() {
 	defer 1 /* ERROR "expected function/method call" */
+	defer int /* ERROR "defer requires function call, not conversion" */ (0)
 	defer defers()
 	var c chan int
 	defer close(c)
-	defer len(c) // TODO(gri) this should not be legal
+	defer len /* ERROR "defer discards result" */ (c)
+}
+
+func breaks() {
+	var x, y int
+
+	break /* ERROR "break" */
+	{
+		break /* ERROR "break" */
+	}
+	if x < y {
+		break /* ERROR "break" */
+	}
+
+	switch x {
+	case 0:
+		break
+	case 1:
+		if x == y {
+			break
+		}
+	default:
+		break
+		break
+	}
+
+	var z interface{}
+	switch z.(type) {
+	case int:
+		break
+	}
+
+	for {
+		break
+	}
+
+	var a []int
+	for _ = range a {
+		break
+	}
+
+	for {
+		if x == y {
+			break
+		}
+	}
+
+	var ch chan int
+	select {
+	case <-ch:
+		break
+	}
+
+	select {
+	case <-ch:
+		if x == y {
+			break
+		}
+	default:
+		break
+	}
+}
+
+func continues() {
+	var x, y int
+
+	continue /* ERROR "continue" */
+	{
+		continue /* ERROR "continue" */
+	}
+
+	if x < y {
+		continue /* ERROR "continue" */
+	}
+
+	switch x {
+	case 0:
+		continue /* ERROR "continue" */
+	}
+
+	var z interface{}
+	switch z.(type) {
+	case int:
+		continue /* ERROR "continue" */
+	}
+
+	var ch chan int
+	select {
+	case <-ch:
+		continue /* ERROR "continue" */
+	}
+
+	for i := 0; i < 10; i++ {
+		continue
+		if x < y {
+			continue
+			break
+		}
+		switch x {
+		case y:
+			continue
+		default:
+			break
+		}
+		select {
+		case <-ch:
+			continue
+		}
+	}
+
+	var a []int
+	for _ = range a {
+		continue
+		if x < y {
+			continue
+			break
+		}
+		switch x {
+		case y:
+			continue
+		default:
+			break
+		}
+		select {
+		case <-ch:
+			continue
+		}
+	}
 }
 
 func switches0() {
@@ -234,17 +406,33 @@ func switches1() {
 
 	switch x {
 	case 0:
+		goto L1
 		L1: fallthrough
 	case 1:
+		goto L2
+		goto L3
+		goto L4
 		L2: L3: L4: fallthrough
 	default:
 	}
 
 	switch x {
 	case 0:
+		goto L5
 		L5: fallthrough
 	default:
+		goto L6
+		goto L7
+		goto L8
 		L6: L7: L8: fallthrough /* ERROR "fallthrough statement out of place" */
+	}
+
+	switch x {
+	case 0:
+		{
+			fallthrough /* ERROR "fallthrough statement out of place" */
+		}
+	default:
 	}
 }
 
@@ -347,7 +535,7 @@ func typeswitch2() {
    }
 }
 
-func rangeloops() {
+func rangeloops1() {
 	var (
 		x int
 		a [10]float32
@@ -452,17 +640,54 @@ func rangeloops() {
 	}
 }
 
+func rangeloops2() {
+	type I int
+	type R rune
+
+	var a [10]int
+	var i I
+	_ = i
+	for i /* ERROR cannot assign */ = range a {}
+	for i /* ERROR cannot assign */ = range &a {}
+	for i /* ERROR cannot assign */ = range a[:] {}
+
+	var s string
+	var r R
+	_ = r
+	for i /* ERROR cannot assign */ = range s {}
+	for i /* ERROR cannot assign */ = range "foo" {}
+	for _, r /* ERROR cannot assign */ = range s {}
+	for _, r /* ERROR cannot assign */ = range "foo" {}
+}
+
 func labels0() {
+	goto L0
+	goto L1
 	L0:
 	L1:
-	L1 /* ERROR "redeclared" */:
+	L1 /* ERROR "already declared" */ :
 	if true {
+		goto L2		
 		L2:
-		L0 /* ERROR "redeclared" */:
+		L0 /* ERROR "already declared" */ :
 	}
 	_ = func() {
+		goto L0
+		goto L1
+		goto L2
 		L0:
 		L1:
 		L2:
 	}
+}
+
+func expression_statements(ch chan int) {
+	expression_statements(ch)
+	<-ch
+	println()
+
+	0 /* ERROR "not used" */
+	1 /* ERROR "not used" */ +2
+	cap /* ERROR "not used" */ (ch)
+	println /* ERROR "must be called" */
 }

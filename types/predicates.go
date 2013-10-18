@@ -49,6 +49,11 @@ func isString(typ Type) bool {
 	return ok && t.info&IsString != 0
 }
 
+func isTyped(typ Type) bool {
+	t, ok := typ.Underlying().(*Basic)
+	return !ok || t.info&IsUntyped == 0
+}
+
 func isUntyped(typ Type) bool {
 	t, ok := typ.Underlying().(*Basic)
 	return ok && t.info&IsUntyped != 0
@@ -62,6 +67,11 @@ func isOrdered(typ Type) bool {
 func isConstType(typ Type) bool {
 	t, ok := typ.Underlying().(*Basic)
 	return ok && t.info&IsConstType != 0
+}
+
+func isInterface(typ Type) bool {
+	_, ok := typ.Underlying().(*Interface)
+	return ok
 }
 
 func isComparable(typ Type) bool {
@@ -84,8 +94,11 @@ func isComparable(typ Type) bool {
 	return false
 }
 
+// hasNil reports whether a type includes the nil value.
 func hasNil(typ Type) bool {
-	switch typ.Underlying().(type) {
+	switch t := typ.Underlying().(type) {
+	case *Basic:
+		return t.kind == UnsafePointer
 	case *Slice, *Pointer, *Signature, *Interface, *Map, *Chan:
 		return true
 	}
@@ -169,7 +182,7 @@ func IsIdentical(x, y Type) bool {
 		// the same names and identical function types. Lower-case method names from
 		// different packages are always different. The order of the methods is irrelevant.
 		if y, ok := y.(*Interface); ok {
-			return identicalMethods(x.methods, y.methods) // methods are sorted
+			return identicalMethods(x.methods, y.methods)
 		}
 
 	case *Map:

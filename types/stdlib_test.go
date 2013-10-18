@@ -117,8 +117,7 @@ func testTestDir(t *testing.T, path string, ignore ...string) {
 
 func TestStdtest(t *testing.T) {
 	testTestDir(t, filepath.Join(runtime.GOROOT(), "test"),
-		"cmplxdivide.go",       // also needs file cmplxdivide1.go - ignore
-		"goto.go", "label1.go", // TODO(gri) implement missing label checks
+		"cmplxdivide.go",          // also needs file cmplxdivide1.go - ignore
 		"mapnan.go", "sigchld.go", // don't work on Windows; testTestDir should consult build tags
 		"sizeof.go", "switch.go", // TODO(gri) tone down duplicate checking in expr switches
 		"typeswitch2.go", // TODO(gri) implement duplicate checking in type switches
@@ -127,14 +126,12 @@ func TestStdtest(t *testing.T) {
 
 func TestStdfixed(t *testing.T) {
 	testTestDir(t, filepath.Join(runtime.GOROOT(), "test", "fixedbugs"),
-		"bug136.go", "bug179.go", "bug344.go", // TODO(gri) implement missing label checks
 		"bug251.go",                           // TODO(gri) incorrect cycle checks for interface types
 		"bug165.go",                           // TODO(gri) isComparable not working for incomplete struct type
 		"bug200.go",                           // TODO(gri) complete duplicate checking in expr switches
 		"bug223.go", "bug413.go", "bug459.go", // TODO(gri) complete initialization checks
 		"bug248.go", "bug302.go", "bug369.go", // complex test instructions - ignore
 		"bug250.go",    // TODO(gri) fix recursive interfaces
-		"bug376.go",    // TODO(gri) built-ins must be called (no built-in function expressions)
 		"issue3924.go", // TODO(gri) && and || produce bool result (not untyped bool)
 		"issue4847.go", // TODO(gri) initialization cycle error not found
 	)

@@ -8,7 +8,6 @@ package types
 
 import (
 	"bytes"
-	"fmt"
 	"go/ast"
 	"go/token"
 
@@ -21,26 +20,31 @@ type operandMode int
 const (
 	invalid  operandMode = iota // operand is invalid
 	novalue                     // operand represents no value (result of a function call w/o result)
+	builtin                     // operand is a built-in function
 	typexpr                     // operand is a type
 	constant                    // operand is a constant; the operand's typ is a Basic type
 	variable                    // operand is an addressable variable
+	mapindex                    // operand is a map index expression (acts like a variable on lhs, commaok on rhs of an assignment)
 	value                       // operand is a computed value
-	valueok                     // like value, but operand may be used in a comma,ok expression
+	commaok                     // like value, but operand may be used in a comma,ok expression
 )
 
 var operandModeString = [...]string{
-	invalid:  "invalid",
+	invalid:  "invalid operand",
 	novalue:  "no value",
+	builtin:  "built-in",
 	typexpr:  "type",
 	constant: "constant",
 	variable: "variable",
+	mapindex: "map index expression",
 	value:    "value",
-	valueok:  "value,ok",
+	commaok:  "comma, ok expression",
 }
 
 // An operand represents an intermediate value during type checking.
 // Operands have an (addressing) mode, the expression evaluating to
-// the operand, the operand's type, and a value if mode == constant.
+// the operand, the operand's type, a value for constants, and an id
+// for built-in functions.
 // The zero value of operand is a ready to use invalid operand.
 //
 type operand struct {
@@ -48,6 +52,7 @@ type operand struct {
 	expr ast.Expr
 	typ  Type
 	val  exact.Value
+	id   builtinId
 }
 
 // pos returns the position of the expression corresponding to x.
@@ -61,29 +66,98 @@ func (x *operand) pos() token.Pos {
 	return x.expr.Pos()
 }
 
+// Operand string formats
+// (not all "untyped" cases can appear due to the type system,
+// but they fall out naturally here)
+//
+// mode       format
+//
+// invalid    <expr> (               <mode>                    )
+// novalue    <expr> (               <mode>                    )
+// builtin    <expr> (               <mode>                    )
+// typexpr    <expr> (               <mode>                    )
+//
+// constant   <expr> (<untyped kind> <mode>                    )
+// constant   <expr> (               <mode>       of type <typ>)
+// constant   <expr> (<untyped kind> <mode> <val>              )
+// constant   <expr> (               <mode> <val> of type <typ>)
+//
+// variable   <expr> (<untyped kind> <mode>                    )
+// variable   <expr> (               <mode>       of type <typ>)
+//
+// mapindex   <expr> (<untyped kind> <mode>                    )
+// mapindex   <expr> (               <mode>       of type <typ>)
+//
+// value      <expr> (<untyped kind> <mode>                    )
+// value      <expr> (               <mode>       of type <typ>)
+//
+// commaok    <expr> (<untyped kind> <mode>                    )
+// commaok    <expr> (               <mode>       of type <typ>)
+//
 func (x *operand) String() string {
-	if x.mode == invalid {
-		return "invalid operand"
-	}
 	var buf bytes.Buffer
+
+	var expr string
 	if x.expr != nil {
-		buf.WriteString(exprString(x.expr))
+		expr = exprString(x.expr)
+	} else {
+		switch x.mode {
+		case builtin:
+			expr = predeclaredFuncs[x.id].name
+		case typexpr:
+			expr = typeString(x.typ)
+		case constant:
+			expr = x.val.String()
+		}
+	}
+
+	// <expr> (
+	if expr != "" {
+		buf.WriteString(expr)
 		buf.WriteString(" (")
 	}
-	buf.WriteString(operandModeString[x.mode])
-	if x.mode == constant {
-		format := " %v"
-		if isString(x.typ) {
-			format = " %q"
+
+	// <untyped kind>
+	hasType := false
+	switch x.mode {
+	case invalid, novalue, builtin, typexpr:
+		// no type
+	default:
+		// has type
+		if isUntyped(x.typ) {
+			buf.WriteString(x.typ.(*Basic).name)
+			buf.WriteByte(' ')
+			break
 		}
-		fmt.Fprintf(&buf, format, x.val)
+		hasType = true
 	}
-	if x.mode != novalue && (x.mode != constant || !isUntyped(x.typ)) {
-		fmt.Fprintf(&buf, " of type %s", typeString(x.typ))
+
+	// <mode>
+	buf.WriteString(operandModeString[x.mode])
+
+	// <val>
+	if x.mode == constant {
+		if s := x.val.String(); s != expr {
+			buf.WriteByte(' ')
+			buf.WriteString(s)
+		}
 	}
-	if x.expr != nil {
+
+	// <typ>
+	if hasType {
+		if x.typ != Typ[Invalid] {
+			buf.WriteString(" of type ")
+			writeType(&buf, x.typ)
+		} else {
+			buf.WriteString(" with invalid type")
+		}
+	}
+
+	// )
+	if expr != "" {
 		buf.WriteByte(')')
 	}
+
 	return buf.String()
 }
 
@@ -115,13 +189,13 @@ func (x *operand) setConst(tok token.Token, lit string) {
 	x.val = val
 }
 
-// isNil reports whether x is the predeclared nil constant.
+// isNil reports whether x is the nil value.
 func (x *operand) isNil() bool {
-	return x.mode == constant && x.val.Kind() == exact.Nil
+	return x.mode == value && x.typ == Typ[UntypedNil]
 }
 
 // TODO(gri) The functions operand.isAssignableTo, checker.convertUntyped,
-//           checker.isRepresentable, and checker.assignOperand are
+//           checker.isRepresentable, and checker.assignment are
 //           overlapping in functionality. Need to simplify and clean up.
 
 // isAssignableTo reports whether x is assignable to a variable of type T.
